@@ -1,5 +1,6 @@
 import os
 import asyncio
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import (
@@ -27,11 +28,10 @@ def teclado_planos():
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    # Texto de apresentação no mesmo estilo do modelo[cite: 1]
     texto = (
-        "🇧🇷🔥 **MEU VIP INTIMIDADE +18** 🔥\n\n"
+        "🇧🇷🔥 **MEU VIP INTINIDADE +18** 🔥\n\n"
         "🎬 Conteúdos sem censura atualizados toda semana.\n"
-        "❤️ Vídeos e fotos transando, mamando e gozando gostoso.\n"
+        "❤️ Exclusivo: vídeos e fotos transando, mamando e gozando gostoso.\n"
         "🎁 Brinquedos especiais e novidades diárias.\n"
         "💬 Chat quente e safado com os assinantes.\n\n"
         "👇 **ESCOLHA SEU PLANO E ACESSE AGORA:**"
@@ -39,7 +39,6 @@ async def cmd_start(message: Message):
 
     caminho_video = "media/preview.mp4"
 
-    # Se houver o arquivo preview.mp4 na pasta media, envia como vídeo em looping/preview
     if os.path.exists(caminho_video):
         video = FSInputFile(caminho_video)
         await message.answer_video(
@@ -49,7 +48,6 @@ async def cmd_start(message: Message):
             reply_markup=teclado_planos()
         )
     else:
-        # Fallback caso ainda não tenha colocado o vídeo na pasta
         await message.answer(
             text=texto,
             parse_mode="Markdown",
@@ -70,7 +68,6 @@ async def gerar_pix(callback: CallbackQuery):
         await callback.message.answer("❌ Erro ao gerar o Pix. Tente novamente em instantes.")
         return
 
-    # Registra no banco de dados
     await database.salvar_cobranca(
         correlation_id=pix_data["correlation_id"],
         charge_id=pix_data["charge_id"],
@@ -78,70 +75,88 @@ async def gerar_pix(callback: CallbackQuery):
         plano_key=plano_key
     )
 
-    teclado_verificacao = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Já Paguei / Verificar Acesso", callback_data=f"check_{pix_data['correlation_id']}")]
-    ])
-
     mensagem_pix = (
         f"💳 **Fatura Gerada - {plano['nome']}**\n\n"
         f"💰 **Valor:** R$ {plano['preco_reais']:.2f}\n\n"
-        f"Copie a chave Pix abaixo e pague no app do seu banco:\n\n"
+        f"Copie a chave Pix Copia e Cola abaixo e pague no app do seu banco:\n\n"
         f"`{pix_data['brcode']}`\n\n"
-        "Após o pagamento, clique no botão abaixo para liberar seu link exclusivo:"
+        "⚡ *Assim que o pagamento for aprovado pelo banco, seu link de acesso será enviado automaticamente aqui no chat!*"
     )
 
     await callback.message.answer(
         mensagem_pix,
-        parse_mode="Markdown",
-        reply_markup=teclado_verificacao
+        parse_mode="Markdown"
     )
 
-@dp.callback_query(F.data.startswith("check_"))
-async def verificar_pagamento(callback: CallbackQuery):
-    correlation_id = callback.data.split("_")[1]
-    status = await woovi.consultar_status_pix(correlation_id)
+# --- ENDPOINT DO WEBHOOK DA WOOVI ---
+async def handle_woovi_webhook(request):
+    try:
+        data = await request.json()
+        evento = data.get("event")
+        
+        # Verifica se o evento é de pagamento concluído
+        if evento == "PixReceived" or data.get("charge", {}).get("status") == "COMPLETED":
+            charge = data.get("charge", {})
+            correlation_id = charge.get("correlationID")
+            
+            if correlation_id:
+                dados_cob = await database.get_cobranca_por_correlation(correlation_id)
+                if dados_cob:
+                    user_id, plano_key = dados_cob
+                    plano = PLANOS[plano_key]
 
-    if status == "COMPLETED":
-        dados = await database.get_cobranca(correlation_id)
-        if not dados:
-            await callback.answer("Cobrança não encontrada.", show_alert=True)
-            return
+                    await database.atualizar_status_cobranca(correlation_id, "COMPLETED")
+                    await database.ativar_ou_renovar_assinatura(
+                        user_id=user_id,
+                        username="",
+                        dias=plano["dias"]
+                    )
 
-        plano_key = dados[2]
-        plano = PLANOS[plano_key]
-        user = callback.from_user
+                    # Gera o link exclusivo de uso único
+                    link = await bot.create_chat_invite_link(
+                        chat_id=CANAL_VIP_ID,
+                        member_limit=1
+                    )
 
-        # Ativa a assinatura no banco de dados
-        await database.ativar_ou_renovar_assinatura(
-            user_id=user.id,
-            username=user.username or "",
-            dias=plano["dias"]
-        )
+                    # Envia o link automaticamente para o cliente
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            f"🎉 **Pagamento Confirmado Automaticamente!**\n\n"
+                            f"Seu acesso de **{plano['dias']} dias** foi liberado com sucesso.\n"
+                            f"Entre no canal pelo link exclusivo abaixo:\n\n"
+                            f"{link.invite_link}\n\n"
+                            "*(Este link expira após o seu primeiro acesso)*"
+                        ),
+                        disable_web_page_preview=True
+                    )
 
-        # Gera link exclusivo para 1 pessoa (não reutilizável)
-        link = await bot.create_chat_invite_link(
-            chat_id=CANAL_VIP_ID,
-            member_limit=1
-        )
+        return web.json_response({"status": "ok"}, status=200)
+    except Exception as e:
+        print(f"Erro no webhook: {e}")
+        return web.json_response({"status": "error"}, status=500)
 
-        await callback.message.edit_text(
-            f"🎉 **Pagamento Confirmado com Sucesso!**\n\n"
-            f"Seu acesso de **{plano['dias']} dias** foi liberado.\n"
-            f"Entre no canal pelo link exclusivo abaixo:\n\n"
-            f"{link.invite_link}\n\n"
-            "*(Este link expira após o seu primeiro acesso)*",
-            disable_web_page_preview=True
-        )
-    else:
-        await callback.answer(
-            "⏳ O pagamento ainda não foi identificado. Aguarde alguns segundos após pagar no banco e clique novamente.",
-            show_alert=True
-        )
+async def web_server_runner():
+    app = web.Application()
+    app.router.add_post("/webhook/woovi", handle_woovi_webhook)
+    
+    # O Render exige que a aplicação escute a porta dinâmica fornecida pelo ambiente (PORT)
+    port = int(os.getenv("PORT", 8080))
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Servidor Webhook rodando na porta {port}")
 
 async def main():
     await database.init_db()
     scheduler.iniciar_agendador(bot)
-    print("Bot VIP inicializado com sucesso!")
+    
+    # Inicia o servidor web em paralelo com o bot do Telegram
+    asyncio.create_task(web_server_runner())
+    
+    print("Bot VIP e Webhook inicializados com sucesso!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
