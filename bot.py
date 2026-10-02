@@ -31,7 +31,7 @@ async def cmd_start(message: Message):
     texto = (
         "🇧🇷🔥 **MEU VIP INTINIDADE +18** 🔥\n\n"
         "🎬 Conteúdos sem censura atualizados toda semana.\n"
-        "❤️ Exclusivo: vídeos e fotos transando, mamando e gozando gostoso.\n"
+        "❤️ Vídeos e fotos transando, mamando e gozando gostoso.\n"
         "🎁 Brinquedos especiais e novidades diárias.\n"
         "💬 Chat quente e safado com os assinantes.\n\n"
         "👇 **ESCOLHA SEU PLANO E ACESSE AGORA:**"
@@ -94,7 +94,6 @@ async def handle_woovi_webhook(request):
         data = await request.json()
         evento = data.get("event")
         
-        # Verifica se o evento é de pagamento concluído
         if evento == "PixReceived" or data.get("charge", {}).get("status") == "COMPLETED":
             charge = data.get("charge", {})
             correlation_id = charge.get("correlationID")
@@ -112,13 +111,11 @@ async def handle_woovi_webhook(request):
                         dias=plano["dias"]
                     )
 
-                    # Gera o link exclusivo de uso único
                     link = await bot.create_chat_invite_link(
                         chat_id=CANAL_VIP_ID,
                         member_limit=1
                     )
 
-                    # Envia o link automaticamente para o cliente
                     await bot.send_message(
                         chat_id=user_id,
                         text=(
@@ -136,27 +133,22 @@ async def handle_woovi_webhook(request):
         print(f"Erro no webhook: {e}")
         return web.json_response({"status": "error"}, status=500)
 
-async def web_server_runner():
+async def main():
+    await database.init_db()
+    scheduler.iniciar_agendador(bot)
+
+    # Configuração e inicialização imediata do servidor aiohttp na porta exigida pelo Render
     app = web.Application()
     app.router.add_post("/webhook/woovi", handle_woovi_webhook)
     
-    # O Render exige que a aplicação escute a porta dinâmica fornecida pelo ambiente (PORT)
     port = int(os.getenv("PORT", 8080))
-    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"Servidor Webhook rodando na porta {port}")
+    print(f"Servidor Webhook escutando na porta {port}")
 
-async def main():
-    await database.init_db()
-    scheduler.iniciar_agendador(bot)
-    
-    # Inicia o servidor web em paralelo com o bot do Telegram
-    asyncio.create_task(web_server_runner())
-    
-    print("Bot VIP e Webhook inicializados com sucesso!")
+    print("Bot VIP iniciado com sucesso!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

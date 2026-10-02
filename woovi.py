@@ -16,30 +16,21 @@ async def criar_cobranca_pix(valor_centavos: int, descricao: str):
         "comment": descricao
     }
 
+    print(f"Enviando requisição para Woovi com AppID: {WOOVI_APP_ID[:5]}...")
+
     async with aiohttp.ClientSession() as session:
         async with session.post(API_URL, json=payload, headers=headers) as response:
+            resposta_texto = await response.text()
+            print(f"Status HTTP Woovi: {response.status}")
+            print(f"Resposta Woovi: {resposta_texto}")
+
             if response.status in (200, 201):
                 data = await response.json()
                 charge = data.get("charge", {})
                 return {
                     "correlation_id": correlation_id,
                     "charge_id": charge.get("id"),
-                    "brcode": charge.get("brCode"), # Código Copia e Cola
-                    "qr_code_image": charge.get("qrCodeImage") # URL da imagem do QR Code
+                    "brcode": charge.get("brCode"),
+                    "qr_code_image": charge.get("qrCodeImage")
                 }
-            return None
-
-async def consultar_status_pix(correlation_id: str):
-    headers = {
-        "Authorization": WOOVI_APP_ID,
-        "Content-Type": "application/json"
-    }
-    url = f"{API_URL}/{correlation_id}"
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                data = await response.json()
-                charge = data.get("charge", {})
-                return charge.get("status") # Retorna "COMPLETED", "ACTIVE", etc.
             return None
